@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Follow Me — Follower</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{ --blue:#2563eb; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --grey:#94a3b8; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  header{ padding:10px 14px 6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  header h1{ font-size:20px; margin:0; }
+  .badge{ background:var(--blue); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:999px; }
+  .ident{ font-size:13px; color:var(--mut); width:100%; }
+  .pill{ margin:6px 14px; padding:9px 12px; border-radius:12px; background:#fff; border:1px solid var(--line); font-weight:600; font-size:15px; display:flex; justify-content:space-between; gap:8px; }
+  .pill .sub{ font-weight:400; color:var(--mut); font-size:12px; }
+  .dot-live{ color:var(--ok); } .dot-stale{ color:var(--warn); } .dot-off{ color:var(--grey); }
+  #map{ height:44vh; min-height:260px; margin:0 14px; border-radius:14px; border:1px solid var(--line); z-index:0; }
+  .bluedot{ width:18px; height:18px; border-radius:50%; background:#2563eb; border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.4); }
+  .greydot{ width:18px; height:18px; border-radius:50%; background:#94a3b8; border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.4); }
+  .figs{ display:flex; gap:8px; margin:10px 14px 0; }
+  .fig{ flex:1; background:#fff; border:1px solid var(--line); border-radius:12px; padding:8px 6px; text-align:center; }
+  .fig .v{ font-size:17px; font-weight:700; }
+  .fig .k{ font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .banner{ margin:10px 14px 0; padding:10px 12px; border-radius:12px; background:#fef3c7; border:1px solid #f59e0b; font-size:14px; display:none; }
+  .card{ margin:12px 14px 0; background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .card h2{ font-size:13px; margin:0 0 8px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); }
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input[type=text]{ flex:1; min-width:120px; padding:9px; border:1px solid var(--line); border-radius:9px; font-size:13px; }
+  button.small{ padding:9px 12px; border-radius:9px; border:1px solid var(--line); background:#fff; font-weight:600; cursor:pointer; font-size:13px; }
+  .note{ font-size:12px; color:var(--mut); margin-top:6px; }
+  #flog{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:200px; overflow:auto; background:#0f172a; color:#e2e8f0; border-radius:10px; padding:8px; }
+  .diag{ font-size:13px; line-height:1.7; }
+  .switch{ display:flex; align-items:center; gap:8px; font-size:14px; }
+  footer{ padding:14px; font-size:12px; color:var(--mut); }
+  a{ color:var(--blue); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Follow Me</h1><span class="badge">Follower v1.0</span>
+  <div class="ident">You are <b id="identLine">…</b></div>
+</header>
+
+<div class="pill"><span id="statusText">Connecting…</span><span class="sub" id="statusSub"></span></div>
+<div class="banner" id="svBanner">This follower is out of date — please refresh the page.</div>
+<div id="map"></div>
+
+<div class="figs">
+  <div class="fig"><div class="v" id="figSpeed">—</div><div class="k">km/h</div></div>
+  <div class="fig"><div class="v" id="figDist">—</div><div class="k">km</div></div>
+  <div class="fig"><div class="v" id="figElapsed">—</div><div class="k">elapsed</div></div>
+  <div class="fig"><div class="v" id="figAcc">—</div><div class="k">GPS acc</div></div>
+</div>
+
+<div class="card">
+  <h2>Maintenance</h2>
+  <label class="switch"><input type="checkbox" id="hbTgl" checked> Heartbeat — let the sharer see that I'm watching</label>
+  <div class="row" style="margin-top:8px"><span class="note" style="margin:0">My name:</span><input type="text" id="fnameBox" placeholder="(optional)"><button class="small" id="saveNameBtn">Save</button><button class="small" id="regenBtn">Regenerate my ID</button></div>
+  <div class="diag" id="diagBox" style="margin-top:8px">Last record received: —</div>
+  <div id="flog" style="margin-top:8px"></div>
+  <div class="row" style="margin-top:8px"><button class="small" id="dlLogBtn">Download log</button><button class="small" id="copyLogBtn">Copy log</button><button class="small" id="clearLogBtn">Clear log</button></div>
+  <div class="note">Logs stay on this device. The sharer sees only your ID, name and follower version while your heartbeat is on.</div>
+</div>
+
+<footer>Follow Me follower · v1.0 · Live only — no history is kept.</footer>
+
+<script>
+"use strict";
+/* ============ CONFIG (Follow Me's own Firebase project — values live here only) ============ */
+const FM_CONFIG = { apiKey: "AIzaSyBgE0LvS635h76-SXObbR0Q_OZhZQx8ZJk", databaseURL: "https://follow-me-47b07-default-rtdb.firebaseio.com" };
+const FV = "1.0", KNOWN_SV = 1;
+
+const $ = id => document.getElementById(id);
+const nowMs = () => Date.now();
+function fmtTs(d){ const p=(n,l)=>String(n).padStart(l||2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds())+"."+p(d.getMilliseconds(),3); }
+function fmtElapsed(ms){ if(ms<0) ms=0; const s=Math.floor(ms/1000); const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60; const p=n=>String(n).padStart(2,"0"); return h>0 ? h+":"+p(m)+":"+p(ss) : p(m)+":"+p(ss); }
+function ago(ts){ const s=Math.max(0,Math.round((nowMs()-ts)/1000)); return s<60 ? s+"s ago" : Math.floor(s/60)+"m "+(s%60)+"s ago"; }
+function fmtClock(ts){ const d=new Date(ts); const p=n=>String(n).padStart(2,"0"); return p(d.getHours())+":"+p(d.getMinutes()); }
+function platformLetter(){ const ua=navigator.userAgent||""; if(/Android/i.test(ua)) return "A"; if(/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints>1)) return "i"; return "W"; }
+function genFid(){ return platformLetter() + String(1+Math.floor(Math.random()*99)).padStart(2,"0"); }
+function uuid(){ if(crypto.randomUUID) return crypto.randomUUID(); return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c=>{ const r=Math.random()*16|0; return (c==="x"?r:(r&0x3|0x8)).toString(16); }); }
+
+/* ---- follower identity (persisted per browser) ---- */
+let FID=null;
+try{ FID=JSON.parse(localStorage.getItem("fm_fid")||"null"); }catch(e){ FID=null; }
+if(!FID || !FID.fid){ FID = { fid: genFid(), fname:"", uuid: uuid() }; try{ localStorage.setItem("fm_fid", JSON.stringify(FID)); }catch(e){} }
+function saveFID(){ try{ localStorage.setItem("fm_fid", JSON.stringify(FID)); }catch(e){} }
+let hbOn = localStorage.getItem("fm_hb")!=="0";
+
+/* ---- follower log ---- */
+let logLines=[]; try{ logLines=JSON.parse(localStorage.getItem("fm_flog")||"[]"); }catch(e){ logLines=[]; }
+function flog(tag,msg){ const line="["+fmtTs(new Date())+"] ["+tag+"] "+msg; logLines.push(line); if(logLines.length>1000) logLines.splice(0,logLines.length-1000); try{ localStorage.setItem("fm_flog", JSON.stringify(logLines)); }catch(e){} const el=$("flog"); if(el){ el.textContent=logLines.slice(-200).join("\n"); el.scrollTop=el.scrollHeight; } }
+function logHeader(){ const tz=(Intl.DateTimeFormat().resolvedOptions().timeZone)||"local"; return "Follow Me follower v"+FV+" — log export\nWatcher: "+FID.fid+" · "+(FID.fname||"(no name)")+"\nExported: "+fmtTs(new Date())+" ("+tz+")\nLines: "+logLines.length+"\nWARNING: this file contains location coordinates.\n----"; }
+function exportLogText(){ return logHeader()+"\n"+logLines.join("\n"); }
+
+/* ---- share id ---- */
+const shareId = new URLSearchParams(location.search).get("s") || "";
+const shareOk = /^[A-Za-z0-9_-]{22}$/.test(shareId);
+
+/* ---- map ---- */
+const map = L.map("map").setView([43.49,-79.72], 13);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
+let dotMarker=null, accCircle=null, trailLine=null, followDot=true;
+map.on("dragstart", ()=>{ followDot=false; });
+function dotIcon(grey){ return L.divIcon({ className:"", html:'<div class="'+(grey?"greydot":"bluedot")+'"></div>', iconSize:[18,18], iconAnchor:[9,9] }); }
+/* glide: animate the marker toward the newest fix */
+let dispPos=null, targetPos=null, glideAnim=null;
+function glideTo(lat, lng){
+  targetPos=[lat,lng];
+  if(!dispPos){ dispPos=targetPos; placeDot(); return; }
+  const from=dispPos.slice(), to=targetPos.slice(), t0=performance.now(), dur=900;
+  if(glideAnim) cancelAnimationFrame(glideAnim);
+  const stepFn=(t)=>{ const k=Math.min(1,(t-t0)/dur); dispPos=[from[0]+(to[0]-from[0])*k, from[1]+(to[1]-from[1])*k]; placeDot(); if(k<1) glideAnim=requestAnimationFrame(stepFn); };
+  glideAnim=requestAnimationFrame(stepFn);
+}
+let curGrey=false, curAcc=0;
+function placeDot(){
+  if(!dispPos) return;
+  if(!dotMarker){ dotMarker=L.marker(dispPos,{icon:dotIcon(curGrey)}).addTo(map); }
+  else { dotMarker.setLatLng(dispPos); dotMarker.setIcon(dotIcon(curGrey)); }
+  if(!accCircle){ accCircle=L.circle(dispPos,{radius:curAcc||0,color:"#2563eb",weight:1,fillOpacity:.08}).addTo(map); }
+  else { accCircle.setLatLng(dispPos); accCircle.setRadius(curAcc||0); }
+  if(followDot) map.panTo(dispPos);
+}
+
+/* ---- live record state (SSE) ---- */
+let rec=null, lastArrival=0, lastNewerTsAt=0, lastTsSeen=-1, gotFirst=false, wasActive=false;
+function applyEvent(path, data){
+  lastArrival=nowMs();
+  if(path==="/" || path===""){ rec = data; }
+  else if(rec){
+    const parts=path.split("/").filter(Boolean);
+    let node=rec; for(let i=0;i<parts.length-1;i++){ if(node[parts[i]]==null) node[parts[i]]={}; node=node[parts[i]]; }
+    if(data===null) delete node[parts[parts.length-1]]; else node[parts[parts.length-1]]=data;
+  }
+  if(rec && typeof rec.ts==="number" && rec.ts>lastTsSeen){ lastTsSeen=rec.ts; lastNewerTsAt=nowMs(); }
+  if(!gotFirst){ gotFirst=true; flog("SSE","first record received: "+(rec?("active="+rec.active+", dev="+(rec.dev||"?")):"null (no share)")); }
+  if(rec && rec.active && !wasActive) flog("SSE","sharing started");
+  if(rec && !rec.active && wasActive) flog("SSE","sharing stopped");
+  if(rec) wasActive=!!rec.active;
+  render();
+}
+function connect(){
+  if(!shareOk){ render(); return; }
+  const es = new EventSource(FM_CONFIG.databaseURL+"/live/"+shareId+".json");
+  es.addEventListener("put", e=>{ try{ const j=JSON.parse(e.data); applyEvent(j.path, j.data); }catch(err){} });
+  es.addEventListener("patch", e=>{ try{ const j=JSON.parse(e.data); if(rec && j.data && typeof j.data==="object"){ const merged=Object.assign({}, rec); for(const k of Object.keys(j.data)){ if(j.data[k]===null) delete merged[k]; else merged[k]=j.data[k]; } applyEvent("/", merged); } else applyEvent(j.path, j.data); }catch(err){} });
+  es.onerror = ()=>{ flog("SSE","subscription dropped — browser will reconnect"); };
+  flog("SSE","connecting to share …"+shareId.slice(-4));
+}
+
+/* ---- presence (heartbeat, 60s while visible, toggleable) ---- */
+async function ping(){
+  if(!hbOn || !shareOk || document.visibilityState!=="visible") return;
+  try{
+    await fetch(FM_CONFIG.databaseURL+"/watch/"+shareId+"/"+FID.uuid+".json", { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ fid:FID.fid, fname:FID.fname||"", fv:FV, ts: nowMs() }) });
+  }catch(e){ flog("HB","heartbeat failed: "+e.message); }
+}
+setInterval(ping, 60000);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") ping(); });
+
+/* ---- rendering / state machine ---- */
+function isStale(){
+  if(!rec || !rec.ts) return false;
+  const age = nowMs()-rec.ts;
+  return age>90000 && (nowMs()-lastNewerTsAt)>90000;
+}
+function render(){
+  const st=$("statusText"), sub=$("statusSub");
+  const sharer = rec ? ((rec.dev||"")+(rec.name?" · "+rec.name:"")) : "";
+  if(!shareOk){ st.innerHTML='<span class="dot-off">●</span> No live share found'; sub.textContent=""; diag("This link looks broken — it may have been reset, or copied incompletely."); return; }
+  if(!gotFirst){ st.textContent="Connecting…"; return; }
+  if(!rec){ st.innerHTML='<span class="dot-off">●</span> No live share found'; sub.textContent=""; diag("Nothing here yet — the link hasn't been shared from, was reset, or was copied wrong."); clearDot(); return; }
+  $("svBanner").style.display = (typeof rec.sv==="number" && rec.sv>KNOWN_SV) ? "block" : "none";
+  /* figures */
+  $("figSpeed").textContent = (rec.active && rec.speed!=null) ? rec.speed : "—";
+  $("figDist").textContent = (rec.dist!=null) ? (rec.dist/1000).toFixed(1) : "—";
+  $("figAcc").textContent = (rec.accuracy!=null) ? rec.accuracy+"m" : "—";
+  if(rec.active && rec.startedAt) $("figElapsed").textContent = fmtElapsed(nowMs()-rec.startedAt);
+  else if(!rec.active && rec.startedAt && rec.endedAt) $("figElapsed").textContent = fmtElapsed(rec.endedAt-rec.startedAt);
+  /* states */
+  if(rec.active && rec.lat==null){ st.innerHTML='<span class="dot-stale">●</span> '+sharer+" — sharing · waiting for a good fix"; sub.textContent=""; }
+  else if(rec.active && isStale()){ st.innerHTML='<span class="dot-stale">●</span> '+sharer+" — last seen "+ago(rec.ts); sub.textContent="updated "+ago(rec.ts); setDot(rec.lat, rec.lng, rec.accuracy, true); }
+  else if(rec.active){ st.innerHTML='<span class="dot-live">●</span> '+sharer+" — Live"; sub.textContent="updated "+ago(rec.ts); setDot(rec.lat, rec.lng, rec.accuracy, false); }
+  else { st.innerHTML='<span class="dot-off">●</span> '+sharer+" — stopped here"+(rec.endedAt?" · "+fmtClock(rec.endedAt):""); sub.textContent=""; if(rec.lat!=null) setDot(rec.lat, rec.lng, rec.accuracy, true); clearTrail(); }
+  /* trail */
+  if(rec.active && rec.trail){ const pts=Object.keys(rec.trail).sort().map(k=>rec.trail[k]).filter(p=>Array.isArray(p)); drawTrail(pts); }
+  else if(rec.active){ drawTrail([]); }
+  diag();
+}
+function setDot(lat,lng,acc,grey){ if(lat==null||lng==null) return; curGrey=grey; curAcc=acc||0; glideTo(lat,lng); }
+function clearDot(){ if(dotMarker){ map.removeLayer(dotMarker); dotMarker=null; } if(accCircle){ map.removeLayer(accCircle); accCircle=null; } dispPos=null; targetPos=null; }
+function drawTrail(pts){ if(!pts.length){ clearTrail(); return; } if(!trailLine){ trailLine=L.polyline(pts,{color:"#2563eb",weight:3,opacity:.55}).addTo(map); } else trailLine.setLatLngs(pts); }
+function clearTrail(){ if(trailLine){ trailLine.setLatLngs([]); } }
+function diag(extra){
+  if(extra){ $("diagBox").textContent="Last record received: "+extra; return; }
+  if(!rec){ $("diagBox").textContent="Last record received: none"; return; }
+  const trailN = rec.trail ? Object.keys(rec.trail).length : 0;
+  $("diagBox").innerHTML="Last record received:<br>"+(rec.dev||"")+" · "+(rec.name||"")+" — lat "+(rec.lat==null?"—":rec.lat)+", lng "+(rec.lng==null?"—":rec.lng)+", acc "+(rec.accuracy==null?"—":rec.accuracy+"m")+"<br>fix age "+(rec.ts?ago(rec.ts):"—")+" · trail points: "+trailN+" · share …"+shareId.slice(-4)+"<br>sharer app: "+(rec.appV||"?")+" · schema v"+(rec.sv==null?"?":rec.sv)+((typeof rec.sv==="number"&&rec.sv<KNOWN_SV)?" (sharer app is an older version)":"");
+}
+setInterval(()=>{ if(rec && rec.active) render(); }, 1000);
+
+/* ---- wiring ---- */
+$("identLine").textContent = FID.fid+(FID.fname?" · "+FID.fname:"");
+$("fnameBox").value = FID.fname||"";
+$("hbTgl").checked = hbOn;
+$("hbTgl").addEventListener("change", ()=>{ hbOn=$("hbTgl").checked; localStorage.setItem("fm_hb", hbOn?"1":"0"); flog("HB","heartbeat "+(hbOn?"ON":"OFF")); if(hbOn) ping(); });
+$("saveNameBtn").addEventListener("click", ()=>{ FID.fname=$("fnameBox").value.trim().slice(0,40); saveFID(); $("identLine").textContent=FID.fid+(FID.fname?" · "+FID.fname:""); flog("ID","name saved: '"+FID.fname+"'"); ping(); });
+$("regenBtn").addEventListener("click", ()=>{ FID.fid=genFid(); saveFID(); $("identLine").textContent=FID.fid+(FID.fname?" · "+FID.fname:""); flog("ID","Follower ID regenerated → "+FID.fid); ping(); });
+$("dlLogBtn").addEventListener("click", ()=>{ const blob=new Blob([exportLogText()],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="followme-follower-logs-"+FID.fid+"-"+new Date().toISOString().slice(0,10)+".txt"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); });
+$("copyLogBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(exportLogText()); $("copyLogBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLogBtn").textContent="Copy log",1500); }catch(e){} });
+$("clearLogBtn").addEventListener("click", ()=>{ if(confirm("Clear the on-device log?")){ logLines=[]; try{ localStorage.removeItem("fm_flog"); }catch(e){} $("flog").textContent=""; } });
+
+/* ---- init ---- */
+(function init(){
+  $("flog").textContent = logLines.slice(-200).join("\n");
+  flog("SYS","follower opened (v"+FV+"), watcher "+FID.fid);
+  if(!FM_CONFIG.apiKey || FM_CONFIG.apiKey.indexOf("__")===0){ $("statusText").textContent="Setup incomplete"; flog("SYS","CONFIG MISSING"); return; }
+  if(!shareOk){ flog("SSE","link failed validation — no share ID"); render(); return; }
+  if(!FID.fname && !localStorage.getItem("fm_name_prompted")){ localStorage.setItem("fm_name_prompted","1"); setTimeout(()=>{ const n=prompt("Your name (the sharer sees it while you watch — optional):",""); if(n){ FID.fname=n.trim().slice(0,40); saveFID(); $("fnameBox").value=FID.fname; $("identLine").textContent=FID.fid+" · "+FID.fname; ping(); } }, 600); }
+  connect(); ping();
+})();
+</script>
+</body>
+</html>

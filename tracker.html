@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Follow Me — Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{ --blue:#2563eb; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc; --ok:#16a34a; --warn:#d97706; --bad:#dc2626; --grey:#94a3b8; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:var(--bg); }
+  header{ padding:10px 14px 6px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+  header h1{ font-size:20px; margin:0; }
+  .badge{ background:var(--blue); color:#fff; font-size:11px; font-weight:600; padding:2px 7px; border-radius:999px; }
+  .ident{ font-size:13px; color:var(--mut); width:100%; }
+  .ident b{ color:var(--ink); }
+  .pill{ margin:6px 14px; padding:9px 12px; border-radius:12px; background:#fff; border:1px solid var(--line); font-weight:600; font-size:15px; display:flex; justify-content:space-between; gap:8px; }
+  .pill .sub{ font-weight:400; color:var(--mut); font-size:12px; }
+  .dot-live{ color:var(--ok); } .dot-stale{ color:var(--warn); } .dot-off{ color:var(--grey); }
+  #map{ height:44vh; min-height:260px; margin:0 14px; border-radius:14px; border:1px solid var(--line); z-index:0; }
+  .bluedot{ width:18px; height:18px; border-radius:50%; background:#2563eb; border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.4); }
+  .greydot{ width:18px; height:18px; border-radius:50%; background:#94a3b8; border:3px solid #fff; box-shadow:0 1px 5px rgba(0,0,0,.4); }
+  .figs{ display:flex; gap:8px; margin:10px 14px 0; }
+  .fig{ flex:1; background:#fff; border:1px solid var(--line); border-radius:12px; padding:8px 6px; text-align:center; }
+  .fig .v{ font-size:17px; font-weight:700; }
+  .fig .k{ font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; }
+  .bigbtn{ display:block; width:calc(100% - 28px); margin:12px 14px 0; padding:16px; font-size:18px; font-weight:700; border:none; border-radius:14px; color:#fff; background:var(--ok); cursor:pointer; }
+  .bigbtn.stop{ background:var(--bad); }
+  .card{ margin:12px 14px 0; background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px; }
+  .card h2{ font-size:13px; margin:0 0 8px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); }
+  .row{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input[type=text]{ flex:1; min-width:120px; padding:9px; border:1px solid var(--line); border-radius:9px; font-size:13px; }
+  button.small{ padding:9px 12px; border-radius:9px; border:1px solid var(--line); background:#fff; font-weight:600; cursor:pointer; font-size:13px; }
+  button.small.primary{ background:var(--blue); border-color:var(--blue); color:#fff; }
+  .hint{ font-size:12px; color:var(--warn); margin-top:6px; display:none; }
+  .note{ font-size:12px; color:var(--mut); margin-top:6px; }
+  #log{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; line-height:1.5; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; background:#0f172a; color:#e2e8f0; border-radius:10px; padding:8px; }
+  .diag{ font-size:13px; line-height:1.7; }
+  .switch{ display:flex; align-items:center; gap:8px; font-size:14px; }
+  footer{ padding:14px; font-size:12px; color:var(--mut); }
+  a{ color:var(--blue); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Follow Me</h1><span class="badge">web v1.0</span>
+  <div class="ident">You are <b id="identLine">…</b> &nbsp;·&nbsp; <a href="#" id="editNameLink">edit name</a> · <a href="#" id="regenLink">regenerate ID</a></div>
+</header>
+
+<div class="pill"><span id="statusText">Not sharing</span><span class="sub" id="statusSub"></span></div>
+<div id="map"></div>
+
+<div class="figs">
+  <div class="fig"><div class="v" id="figSpeed">—</div><div class="k">km/h</div></div>
+  <div class="fig"><div class="v" id="figDist">0.0</div><div class="k">km</div></div>
+  <div class="fig"><div class="v" id="figElapsed">00:00</div><div class="k">elapsed</div></div>
+  <div class="fig"><div class="v" id="figAcc">—</div><div class="k">GPS acc</div></div>
+</div>
+
+<button class="bigbtn" id="shareBtn">▶ Start Sharing</button>
+<div class="hint" id="battHint">⚠️ GPS accuracy is poor — check that Battery Saver is OFF on this phone (it throttles location even for trackers).</div>
+
+<div class="card">
+  <h2>Your share link</h2>
+  <div class="row"><input type="text" id="linkBox" readonly><button class="small primary" id="copyLinkBtn">Copy</button><button class="small" id="shareLinkBtn">Share</button></div>
+  <div class="note">Anyone with this link can watch while you are sharing. Reinstalling gives you a new link.</div>
+  <div class="row" style="margin-top:8px"><button class="small" id="resetLinkBtn">Reset link</button><span class="note" id="watchLine">Watching: —</span></div>
+</div>
+
+<div class="card">
+  <h2>Debug</h2>
+  <div class="diag" id="diagBox">Diagnostics: …</div>
+  <div class="row" style="margin:8px 0"><button class="small" id="checkPipeBtn">Check pipe</button><button class="small" id="readbackBtn">Refresh readback</button><label class="switch"><input type="checkbox" id="verboseTgl"> Verbose GPS</label></div>
+  <div id="log"></div>
+  <div class="row" style="margin-top:8px"><button class="small" id="dlLogBtn">Download log</button><button class="small" id="copyLogBtn">Copy log</button><button class="small" id="clearLogBtn">Clear log</button></div>
+  <div class="note">Logs stay on this device. Exporting includes location coordinates — share carefully.</div>
+</div>
+
+<div class="card">
+  <h2>About</h2>
+  <div class="diag" id="aboutBox"></div>
+  <div class="row" style="margin-top:6px"><button class="small" id="copyAboutBtn">Copy versions</button></div>
+</div>
+
+<footer>Follow Me tracker · web v1.0 · Keep this page open and the screen on while sharing (web version). Android app comes in a later step.</footer>
+
+<script>
+"use strict";
+/* ============ CONFIG (values live here only — Follow Me's own Firebase project) ============ */
+const FM_CONFIG = { apiKey: "AIzaSyBgE0LvS635h76-SXObbR0Q_OZhZQx8ZJk", databaseURL: "https://follow-me-47b07-default-rtdb.firebaseio.com" };
+const APP_V = "web 1.0", SCHEMA_V = 1, PAGE_V = "web v1.0";
+const FOLLOWER_URL = location.origin + location.pathname.replace(/[^/]*$/, "") + "follow.html";
+
+/* ============ helpers ============ */
+const $ = id => document.getElementById(id);
+const nowMs = () => Date.now();
+function fmtTs(d){ const p=(n,l)=>String(n).padStart(l||2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds())+"."+p(d.getMilliseconds(),3); }
+function haversine(a,b,c,d){ const R=6371000, t=x=>x*Math.PI/180; const dLa=t(c-a), dLo=t(d-b); const h=Math.sin(dLa/2)**2 + Math.cos(t(a))*Math.cos(t(c))*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(h)); }
+function fmtElapsed(ms){ if(ms<0) ms=0; const s=Math.floor(ms/1000); const h=Math.floor(s/3600), m=Math.floor((s%3600)/60), ss=s%60; const p=n=>String(n).padStart(2,"0"); return h>0 ? h+":"+p(m)+":"+p(ss) : p(m)+":"+p(ss); }
+function ago(ts){ const s=Math.max(0,Math.round((nowMs()-ts)/1000)); return s<60 ? s+"s ago" : Math.floor(s/60)+"m "+(s%60)+"s ago"; }
+function randId(len){ const chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"; const buf=new Uint8Array(len); crypto.getRandomValues(buf); return Array.from(buf, b=>chars[b%64]).join(""); }
+function platformLetter(){ const ua=navigator.userAgent||""; if(/Android/i.test(ua)) return "A"; if(/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints>1)) return "i"; return "W"; }
+function genDevId(){ return "W" + String(1+Math.floor(Math.random()*99)).padStart(2,"0"); } /* tracker web always runs as W */
+
+/* ============ log (on-device only, 1000-line ring) ============ */
+let logLines = [];
+try{ logLines = JSON.parse(localStorage.getItem("fm_log")||"[]"); }catch(e){ logLines=[]; }
+function log(tag, msg){ const line="["+fmtTs(new Date())+"] ["+tag+"] "+msg; logLines.push(line); if(logLines.length>1000) logLines.splice(0, logLines.length-1000); try{ localStorage.setItem("fm_log", JSON.stringify(logLines)); }catch(e){} renderLog(); }
+function renderLog(){ const el=$("log"); if(el){ el.textContent = logLines.slice(-200).join("\n"); el.scrollTop = el.scrollHeight; } }
+function logHeader(){ const tz=(Intl.DateTimeFormat().resolvedOptions().timeZone)||"local"; return "Follow Me tracker "+PAGE_V+" — log export\nDevice: "+(ID?ID.dev:"?")+" · "+(ID&&ID.name?ID.name:"(no name)")+"\nExported: "+fmtTs(new Date())+" ("+tz+")\nLines: "+logLines.length+"\nWARNING: this file contains location coordinates.\n----"; }
+function exportLogText(){ return logHeader()+"\n"+logLines.join("\n"); }
+
+/* ============ identity & auth ============ */
+let ID = null;
+try{ ID = JSON.parse(localStorage.getItem("fm_id")||"null"); }catch(e){ ID=null; }
+function saveID(){ try{ localStorage.setItem("fm_id", JSON.stringify(ID)); }catch(e){} }
+let authBusy = false;
+async function anonSignUp(){
+  const r = await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key="+FM_CONFIG.apiKey, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({returnSecureToken:true}) });
+  if(!r.ok) throw new Error("signUp HTTP "+r.status);
+  const j = await r.json();
+  return { idToken:j.idToken, refreshToken:j.refreshToken, uid:j.localId, exp: nowMs() + (parseInt(j.expiresIn,10)||3600)*1000 };
+}
+async function refreshAuth(){
+  const r = await fetch("https://securetoken.googleapis.com/v1/token?key="+FM_CONFIG.apiKey, { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body: "grant_type=refresh_token&refresh_token="+encodeURIComponent(ID.refreshToken) });
+  if(!r.ok) throw new Error("refresh HTTP "+r.status);
+  const j = await r.json();
+  ID.idToken = j.id_token; ID.refreshToken = j.refresh_token; ID.uid = j.user_id; ID.exp = nowMs() + (parseInt(j.expires_in,10)||3600)*1000; saveID();
+}
+async function ensureToken(){
+  if(!ID) throw new Error("no identity");
+  if(ID.exp - nowMs() < 5*60*1000){ await refreshAuth(); log("AUTH","token refreshed"); }
+  return ID.idToken;
+}
+async function newIdentity(reason){
+  const a = await anonSignUp();
+  ID = { shareId: randId(22), uid:a.uid, idToken:a.idToken, refreshToken:a.refreshToken, exp:a.exp, dev: genDevId(), name: ID&&ID.name?ID.name:"" };
+  saveID();
+  const body = { dev:ID.dev, name:ID.name||"", owner:ID.uid, active:false, sv:SCHEMA_V, appV:APP_V, ts: nowMs() };
+  const r = await fetch(FM_CONFIG.databaseURL+"/live/"+ID.shareId+".json?auth="+ID.idToken, { method:"PUT", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if(!r.ok) throw new Error("create record HTTP "+r.status);
+  log("ID","identity created ("+reason+"), share …"+ID.shareId.slice(-4)+", dev "+ID.dev);
+}
+async function dbWrite(method, path, body, retried){
+  const tok = await ensureToken();
+  const r = await fetch(FM_CONFIG.databaseURL+path+".json?auth="+tok, { method:method, headers:{"Content-Type":"application/json"}, body: body===undefined?undefined:JSON.stringify(body) });
+  if(r.status===401 && !retried){ log("DB","401 — refreshing token and retrying once"); await refreshAuth(); return dbWrite(method, path, body, true); }
+  return r;
+}
+
+/* ============ map ============ */
+const map = L.map("map").setView([43.49,-79.72], 13);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
+let dotMarker=null, accCircle=null, trailLine=null, myTrail=[];
+function drawMe(lat, lng, acc, grey){
+  const ll=[lat,lng];
+  if(!dotMarker){ dotMarker = L.marker(ll, { icon: L.divIcon({ className:"", html:'<div class="'+(grey?"greydot":"bluedot")+'"></div>', iconSize:[18,18], iconAnchor:[9,9] }) }).addTo(map); }
+  else { dotMarker.setLatLng(ll); dotMarker.setIcon(L.divIcon({ className:"", html:'<div class="'+(grey?"greydot":"bluedot")+'"></div>', iconSize:[18,18], iconAnchor:[9,9] })); }
+  if(!accCircle){ accCircle = L.circle(ll, { radius:acc||0, color:"#2563eb", weight:1, fillOpacity:.08 }).addTo(map); }
+  else { accCircle.setLatLng(ll); accCircle.setRadius(acc||0); }
+  if(followMe) map.panTo(ll);
+}
+let followMe = true;
+map.on("dragstart", ()=>{ followMe=false; });
+
+/* ============ GPS + sharing engine ============ */
+let verbose = localStorage.getItem("fm_verbose")==="1";
+let lastFix=null, prevAccFix=null, rejectedCount=0, sessionDist=0;
+let sharing=false, startedAt=0, endedAt=0, lastSentAt=0, lastSentFix=null, lastWriteInfo="—";
+let trailCount=0, lastTrailPoint=null, trailQueue=[];
+try{ trailQueue = JSON.parse(localStorage.getItem("fm_trail_queue")||"[]"); }catch(e){ trailQueue=[]; }
+let stopIntent = null;
+try{ stopIntent = JSON.parse(localStorage.getItem("fm_stop_intent")||"null"); }catch(e){ stopIntent=null; }
+let wakeLock=null, offlineSince=0, writeSummary={count:0,last:0};
+
+async function acquireWakeLock(){ try{ if("wakeLock" in navigator){ wakeLock = await navigator.wakeLock.request("screen"); log("SYS","wake lock acquired"); } else { log("SYS","wake lock not supported in this browser"); } }catch(e){ log("SYS","wake lock failed: "+e.message); } }
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible" && sharing) acquireWakeLock(); });
+
+function speedKmh(fix){
+  if(fix.speed!=null && isFinite(fix.speed) && fix.speed>=0) return Math.round(fix.speed*3.6);
+  if(prevAccFix && fix.ts>prevAccFix.ts){ const d=haversine(prevAccFix.lat,prevAccFix.lng,fix.lat,fix.lng); const dt=(fix.ts-prevAccFix.ts)/1000; if(dt>0) return Math.round(d/dt*3.6); }
+  return null;
+}
+
+async function sendPosition(fix, why){
+  const body = { lat:+fix.lat.toFixed(6), lng:+fix.lng.toFixed(6), accuracy: Math.round(fix.acc), speed: speedKmh(fix), dist: Math.round(sessionDist), ts: fix.ts, active:true, dev: ID.dev, name: ID.name||"", appV: APP_V, sv: SCHEMA_V };
+  try{
+    const r = await dbWrite("PATCH", "/live/"+ID.shareId, body);
+    lastWriteInfo = r.status+" at "+fmtTs(new Date());
+    if(r.ok){ lastSentAt=nowMs(); lastSentFix=fix; writeSummary.count++; writeSummary.last=nowMs(); }
+    else log("DB","position write failed HTTP "+r.status+" ("+why+")");
+    return r.ok;
+  }catch(e){ log("DB","position write error ("+why+"): "+e.message); return false; }
+}
+
+async function pushTrailPoint(lat, lng){
+  const pt=[+lat.toFixed(6), +lng.toFixed(6)];
+  if(!navigator.onLine){ trailQueue.push(pt); try{ localStorage.setItem("fm_trail_queue", JSON.stringify(trailQueue)); }catch(e){} log("GPS","offline — trail point queued ("+trailQueue.length+")"); return; }
+  try{
+    const r = await dbWrite("POST", "/live/"+ID.shareId+"/trail", pt);
+    if(r.ok){ trailCount++; lastTrailPoint={lat,lng}; myTrail.push(pt); if(!trailLine){ trailLine=L.polyline(myTrail,{color:"#2563eb",weight:3,opacity:.55}).addTo(map); } else trailLine.setLatLngs(myTrail); }
+    else log("DB","trail write failed HTTP "+r.status);
+  }catch(e){ trailQueue.push(pt); try{ localStorage.setItem("fm_trail_queue", JSON.stringify(trailQueue)); }catch(e){} }
+}
+async function flushTrailQueue(){
+  if(!trailQueue.length) return;
+  const q = trailQueue.slice(); let done=0;
+  for(const pt of q){ try{ const r = await dbWrite("POST", "/live/"+ID.shareId+"/trail", pt); if(r.ok){ done++; trailCount++; myTrail.push(pt); } else break; }catch(e){ break; } }
+  trailQueue = q.slice(done);
+  try{ localStorage.setItem("fm_trail_queue", JSON.stringify(trailQueue)); }catch(e){}
+  if(done) { log("GPS","trail queue flushed: "+done+" point(s)"); if(trailLine) trailLine.setLatLngs(myTrail); else if(myTrail.length) trailLine=L.polyline(myTrail,{color:"#2563eb",weight:3,opacity:.55}).addTo(map); }
+}
+
+function onFix(pos){
+  const fix = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy||9999, speed: (pos.coords.speed==null?null:pos.coords.speed), ts: pos.timestamp||nowMs() };
+  lastFix = fix;
+  if(fix.acc>100){ rejectedCount++; if(verbose) log("GPS","fix "+fix.lat.toFixed(6)+","+fix.lng.toFixed(6)+" acc "+Math.round(fix.acc)+"m gate: too-inaccurate"); updateBattHint(fix.acc); return; }
+  updateBattHint(fix.acc);
+  /* distance from ALL accepted fixes; step counts only beyond the fix's accuracy radius (anti-creep) */
+  if(prevAccFix){ const step=haversine(prevAccFix.lat,prevAccFix.lng,fix.lat,fix.lng); if(step>fix.acc) sessionDist+=step; }
+  drawMe(fix.lat, fix.lng, fix.acc, !sharing);
+  if(sharing){
+    let gate="too-soon";
+    const moved = lastSentFix ? haversine(lastSentFix.lat,lastSentFix.lng,fix.lat,fix.lng) : 1e9;
+    const since = nowMs()-lastSentAt;
+    if(!lastSentFix || moved>=100 || (moved>=25 && since>=5000)){ gate="sent"; sendPosition(fix, "gate"); }
+    else if(moved<25) gate="too-close";
+    if(verbose) log("GPS","fix "+fix.lat.toFixed(6)+","+fix.lng.toFixed(6)+" acc "+Math.round(fix.acc)+"m gate: "+gate);
+    if(!lastTrailPoint || haversine(lastTrailPoint.lat,lastTrailPoint.lng,fix.lat,fix.lng)>=100) pushTrailPoint(fix.lat, fix.lng);
+  }
+  prevAccFix = fix;
+}
+function onFixErr(e){ log("GPS","error: "+e.message); }
+function updateBattHint(acc){ $("battHint").style.display = (acc>80) ? "block" : "none"; }
+
+setInterval(()=>{ /* 30s heartbeat */
+  if(sharing && lastFix && lastFix.acc<=100 && nowMs()-lastSentAt>=30000){ sendPosition(lastFix, "heartbeat"); if(verbose) log("GPS","heartbeat send"); }
+}, 5000);
+setInterval(()=>{ /* per-minute write summary (essentials level) */
+  if(writeSummary.count>0){ log("DB","writes ok: "+writeSummary.count+" in the last minute"); writeSummary.count=0; }
+}, 60000);
+window.addEventListener("offline", ()=>{ offlineSince=nowMs(); log("NET","offline"); });
+window.addEventListener("online", async ()=>{ log("NET","back online"+(offlineSince?" after "+Math.round((nowMs()-offlineSince)/1000)+"s":"")); offlineSince=0; await flushTrailQueue(); if(sharing && lastFix && lastFix.acc<=100) sendPosition(lastFix,"reconnect"); if(stopIntent) doStop(true); });
+
+/* ---- start / stop ---- */
+async function doStart(){
+  if(!lastFix){ log("SHARE","start pressed with no fix yet — sharing will begin sending at first good fix"); }
+  sessionDist=0; trailCount=0; lastTrailPoint=null; myTrail=[]; if(trailLine){ trailLine.setLatLngs([]); }
+  lastSentFix=null; lastSentAt=0;
+  try{
+    await dbWrite("DELETE", "/live/"+ID.shareId+"/trail");
+    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:true, startedAt: nowMs(), endedAt:null, dist:0, speed:null, lat:null, lng:null, ts: nowMs(), dev:ID.dev, name:ID.name||"", appV:APP_V, sv:SCHEMA_V });
+    if(!r.ok){ log("SHARE","start write failed HTTP "+r.status); return; }
+  }catch(e){ log("SHARE","start write error: "+e.message); return; }
+  sharing=true; startedAt=nowMs();
+  acquireWakeLock();
+  log("SHARE","sharing STARTED");
+  if(lastFix && lastFix.acc<=100) sendPosition(lastFix, "start");
+  renderSharing();
+}
+async function doStop(isRetry){
+  stopIntent = { at: nowMs() }; try{ localStorage.setItem("fm_stop_intent", JSON.stringify(stopIntent)); }catch(e){}
+  try{
+    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:false, endedAt: nowMs(), speed:null, ts: nowMs() });
+    if(!r.ok){ log("SHARE","stop write failed HTTP "+r.status+" — will retry on reconnect"); return; }
+    await dbWrite("DELETE", "/live/"+ID.shareId+"/trail");
+    stopIntent=null; try{ localStorage.removeItem("fm_stop_intent"); }catch(e){}
+    sharing=false; endedAt=nowMs();
+    if(wakeLock){ try{ await wakeLock.release(); }catch(e){} wakeLock=null; }
+    log("SHARE","sharing STOPPED"+(isRetry?" (retry succeeded)":""));
+    renderSharing();
+  }catch(e){ log("SHARE","stop write error: "+e.message+" — will retry on reconnect"); }
+}
+setInterval(()=>{ if(stopIntent && sharing) doStop(true); }, 20000);
+
+function renderSharing(){
+  $("shareBtn").textContent = sharing ? "■ Stop Sharing" : "▶ Start Sharing";
+  $("shareBtn").className = "bigbtn"+(sharing?" stop":"");
+}
+
+/* ---- watching (poll the owner-only watch list) ---- */
+let watchList=[];
+async function pollWatch(){
+  if(!ID) return;
+  try{
+    const tok = await ensureToken();
+    const r = await fetch(FM_CONFIG.databaseURL+"/watch/"+ID.shareId+".json?auth="+tok);
+    if(!r.ok){ $("watchLine").textContent="Watching: —"; return; }
+    const j = await r.json();
+    watchList = j ? Object.values(j) : [];
+    const fresh = watchList.filter(w=> w && (nowMs()-(w.ts||0))<=180000);
+    $("watchLine").textContent = "Watching: " + (fresh.length ? fresh.length+" — "+fresh.map(w=> (w.fid||"?")+(w.fname?" · "+w.fname:"")).join(", ") : "0");
+  }catch(e){ /* silent */ }
+}
+setInterval(pollWatch, 20000);
+
+/* ============ diagnostics ============ */
+let readbackInfo="not run yet";
+async function runReadback(){
+  try{
+    const r = await fetch(FM_CONFIG.databaseURL+"/live/"+ID.shareId+".json");
+    if(!r.ok){ readbackInfo="HTTP "+r.status; return; }
+    const j = await r.json();
+    readbackInfo = j ? ("active="+j.active+", lat="+(j.lat==null?"—":j.lat)+", ts="+(j.ts?ago(j.ts):"—")+", appV="+(j.appV||"?")) : "record missing";
+  }catch(e){ readbackInfo="error: "+e.message; }
+  renderDiag();
+}
+function renderDiag(){
+  const gps = lastFix ? ("fix "+ago(lastFix.ts)+", acc "+Math.round(lastFix.acc)+"m") : "no fix yet";
+  const auth = ID ? ("ok (uid …"+ID.uid.slice(-4)+", token "+Math.max(0,Math.round((ID.exp-nowMs())/60000))+"m left)") : "none";
+  const wl = ("wakeLock" in navigator) ? (wakeLock?"held":"not held") : "not supported";
+  $("diagBox").innerHTML =
+    "✓/✗ GPS: "+gps+"<br>Auth: "+auth+"<br>Last write: "+lastWriteInfo+"<br>Readback (what a follower sees): "+readbackInfo+"<br>Wake lock: "+wl+" · Rejected fixes: "+rejectedCount+" · Trail points: "+trailCount+(trailQueue.length?" · queued offline: "+trailQueue.length:"");
+}
+
+/* ============ 1s ticker: pill + figures ============ */
+setInterval(()=>{
+  if(!ID) return;
+  const st=$("statusText"), sub=$("statusSub");
+  if(sharing){
+    if(!lastSentFix){ st.innerHTML='<span class="dot-stale">●</span> Sharing · waiting for a good fix'; }
+    else st.innerHTML='<span class="dot-live">●</span> Sharing · Live';
+    sub.textContent = lastSentAt ? ("sent "+ago(lastSentAt)) : "";
+    $("figElapsed").textContent = fmtElapsed(nowMs()-startedAt);
+  } else if(endedAt){
+    st.innerHTML='<span class="dot-off">●</span> Stopped here'; sub.textContent = "stopped "+ago(endedAt);
+    $("figElapsed").textContent = fmtElapsed(endedAt-startedAt);
+  } else {
+    st.innerHTML='<span class="dot-off">●</span> Not sharing'; sub.textContent = "";
+  }
+  if(lastFix){
+    $("figAcc").textContent = Math.round(lastFix.acc)+"m";
+    if(sharing){ const sp=speedKmh(lastFix); $("figSpeed").textContent = (sp==null?"—":sp); }
+  }
+  $("figDist").textContent = (sessionDist/1000).toFixed(1);
+  renderDiagLight();
+}, 1000);
+let diagTick=0;
+function renderDiagLight(){ if(++diagTick%5===0) renderDiag(); }
+
+/* ============ UI wiring ============ */
+function shareLink(){ return FOLLOWER_URL+"?s="+ID.shareId; }
+function renderIdent(){
+  $("identLine").textContent = ID.dev+" · "+(ID.name||"(tap edit name)");
+  $("linkBox").value = shareLink();
+  $("aboutBox").innerHTML = "Tracker: Follow Me "+PAGE_V+"<br>Follower: v1.0 · Home: v1.0<br>Device: "+ID.dev+" · "+(ID.name||"")+"<br>Share ID: …"+ID.shareId.slice(-4);
+}
+$("shareBtn").addEventListener("click", ()=>{ if(sharing) doStop(false); else doStart(); });
+$("copyLinkBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(shareLink()); $("copyLinkBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLinkBtn").textContent="Copy",1500); }catch(e){ $("linkBox").select(); document.execCommand("copy"); } });
+$("shareLinkBtn").addEventListener("click", async ()=>{ if(navigator.share){ try{ await navigator.share({ title:"Follow Me", text:"Watch me live on Follow Me:", url: shareLink() }); }catch(e){} } else { $("linkBox").select(); document.execCommand("copy"); } });
+$("resetLinkBtn").addEventListener("click", async ()=>{
+  if(!confirm("Reset your share link? The old link stops working immediately. Your final 'stopped here' point on the old link is erased.")) return;
+  const oldId = ID.shareId;
+  try{ await dbWrite("DELETE", "/live/"+oldId); }catch(e){}
+  ID.shareId = randId(22); saveID();
+  try{
+    const body = { dev:ID.dev, name:ID.name||"", owner:ID.uid, active:false, sv:SCHEMA_V, appV:APP_V, ts: nowMs() };
+    const r = await dbWrite("PUT", "/live/"+ID.shareId, body);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    log("ID","link RESET — old link dead, new share …"+ID.shareId.slice(-4));
+    renderIdent();
+  }catch(e){ log("ID","reset failed: "+e.message); alert("Reset failed — check connection and try again."); }
+});
+$("editNameLink").addEventListener("click", async (e)=>{
+  e.preventDefault();
+  const n = prompt("Your display name (followers see this):", ID.name||"");
+  if(n===null) return;
+  ID.name = n.trim().slice(0,40); saveID(); renderIdent();
+  try{ const r = await dbWrite("PATCH", "/live/"+ID.shareId, { name: ID.name, dev: ID.dev }); log("ID","name updated → '"+ID.name+"' (PATCH HTTP "+r.status+")"); }catch(err){ log("ID","name PATCH failed: "+err.message); }
+});
+$("regenLink").addEventListener("click", async (e)=>{
+  e.preventDefault();
+  ID.dev = genDevId(); saveID(); renderIdent();
+  try{ await dbWrite("PATCH", "/live/"+ID.shareId, { dev: ID.dev }); log("ID","Phone ID regenerated → "+ID.dev); }catch(err){ log("ID","ID PATCH failed: "+err.message); }
+});
+$("verboseTgl").checked = verbose;
+$("verboseTgl").addEventListener("change", ()=>{ verbose = $("verboseTgl").checked; localStorage.setItem("fm_verbose", verbose?"1":"0"); log("SYS","verbose GPS "+(verbose?"ON":"OFF")); });
+$("checkPipeBtn").addEventListener("click", async ()=>{
+  try{
+    const w = await dbWrite("PUT", "/ping/"+ID.shareId, { at: nowMs(), by: ID.dev });
+    if(!w.ok){ log("PIPE","check pipe write HTTP "+w.status); alert("Check pipe: write failed HTTP "+w.status); return; }
+    const tok = await ensureToken();
+    const r = await fetch(FM_CONFIG.databaseURL+"/ping/"+ID.shareId+".json?auth="+tok);
+    const j = await r.json();
+    log("PIPE","check pipe OK — wrote and read back at="+ (j&&j.at) );
+    alert("Check pipe: OK ✓ (auth + rules + write + read all working)");
+  }catch(e){ log("PIPE","check pipe error: "+e.message); alert("Check pipe failed: "+e.message); }
+});
+$("readbackBtn").addEventListener("click", runReadback);
+$("dlLogBtn").addEventListener("click", ()=>{ const blob=new Blob([exportLogText()],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="followme-logs-"+ID.dev+"-"+new Date().toISOString().slice(0,10)+".txt"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); });
+$("copyLogBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(exportLogText()); $("copyLogBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLogBtn").textContent="Copy log",1500); }catch(e){} });
+$("clearLogBtn").addEventListener("click", ()=>{ if(confirm("Clear the on-device log?")){ logLines=[]; try{ localStorage.removeItem("fm_log"); }catch(e){} renderLog(); } });
+$("copyAboutBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText("Follow Me tracker "+PAGE_V+" · follower v1.0 · home v1.0 · device "+ID.dev+" · "+(ID.name||"")); }catch(e){} });
+
+/* ============ init ============ */
+(async function init(){
+  renderLog();
+  log("SYS","app opened ("+PAGE_V+")");
+  if(!FM_CONFIG.apiKey || FM_CONFIG.apiKey.indexOf("__")===0){ log("SYS","CONFIG MISSING — Firebase values not filled in"); $("statusText").textContent="Setup incomplete"; return; }
+  if(!ID){
+    try{ await newIdentity("first launch"); }
+    catch(e){ log("ID","identity creation failed: "+e.message); $("statusText").textContent="Could not create identity — check connection, reload."; return; }
+  } else {
+    try{ await ensureToken(); }
+    catch(e){
+      log("AUTH","saved login could not be renewed ("+e.message+") — identity is dead, creating a new one. Your link has changed.");
+      try{ await newIdentity("refresh token lost"); }catch(e2){ log("ID","re-identity failed: "+e2.message); return; }
+    }
+    /* make sure our record exists (e.g. after a Reset that half-failed) */
+    try{
+      const tok = await ensureToken();
+      const r = await fetch(FM_CONFIG.databaseURL+"/live/"+ID.shareId+".json?auth="+tok);
+      const j = await r.json();
+      if(!j){ const body={ dev:ID.dev, name:ID.name||"", owner:ID.uid, active:false, sv:SCHEMA_V, appV:APP_V, ts: nowMs() }; await dbWrite("PUT", "/live/"+ID.shareId, body); log("ID","record recreated (was missing)"); }
+      else if(j.active){ /* a previous session never got its stop through */ await dbWrite("PATCH", "/live/"+ID.shareId, { active:false, endedAt: nowMs(), speed:null }); log("ID","previous session was still marked live — marked stopped on open"); }
+    }catch(e){ log("ID","record check failed: "+e.message); }
+  }
+  renderIdent(); renderSharing();
+  if(stopIntent){ log("SHARE","a previous Stop never reached the server — retrying now"); sharing=true; doStop(true); }
+  if("geolocation" in navigator){ navigator.geolocation.watchPosition(onFix, onFixErr, { enableHighAccuracy:true, maximumAge:1000, timeout:20000 }); log("GPS","watch started (local only until Start Sharing)"); }
+  else log("GPS","geolocation not available in this browser");
+  pollWatch(); runReadback();
+})();
+</script>
+</body>
+</html>
