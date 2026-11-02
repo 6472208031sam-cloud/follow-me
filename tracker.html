@@ -44,7 +44,7 @@
 </head>
 <body>
 <header>
-  <h1>Follow Me</h1><span class="badge">web v1.0</span>
+  <h1>Follow Me</h1><span class="badge">web v1.1</span>
   <div class="ident">You are <b id="identLine">…</b> &nbsp;·&nbsp; <a href="#" id="editNameLink">edit name</a> · <a href="#" id="regenLink">regenerate ID</a></div>
 </header>
 
@@ -68,6 +68,11 @@
   <div class="row" style="margin-top:8px"><button class="small" id="resetLinkBtn">Reset link</button><span class="note" id="watchLine">Watching: —</span></div>
 </div>
 
+<div class="card" id="summaryCard" style="display:none">
+  <h2>Session summary</h2>
+  <div class="diag" id="summaryBody"></div>
+</div>
+
 <div class="card">
   <h2>Debug</h2>
   <div class="diag" id="diagBox">Diagnostics: …</div>
@@ -83,13 +88,13 @@
   <div class="row" style="margin-top:6px"><button class="small" id="copyAboutBtn">Copy versions</button></div>
 </div>
 
-<footer>Follow Me tracker · web v1.0 · Keep this page open and the screen on while sharing (web version). Android app comes in a later step.</footer>
+<footer>Follow Me tracker · web v1.1 · Keep this page open and the screen on while sharing (web version). Android app comes in a later step.</footer>
 
 <script>
 "use strict";
 /* ============ CONFIG (values live here only — Follow Me's own Firebase project) ============ */
 const FM_CONFIG = { apiKey: "AIzaSyBgE0LvS635h76-SXObbR0Q_OZhZQx8ZJk", databaseURL: "https://follow-me-47b07-default-rtdb.firebaseio.com" };
-const APP_V = "web 1.0", SCHEMA_V = 1, PAGE_V = "web v1.0";
+const APP_V = "web 1.1", SCHEMA_V = 1, PAGE_V = "web v1.1";
 const FOLLOWER_URL = location.origin + location.pathname.replace(/[^/]*$/, "") + "follow.html";
 
 /* ============ helpers ============ */
@@ -169,6 +174,7 @@ let verbose = localStorage.getItem("fm_verbose")==="1";
 let lastFix=null, prevAccFix=null, rejectedCount=0, sessionDist=0;
 let sharing=false, startedAt=0, endedAt=0, lastSentAt=0, lastSentFix=null, lastWriteInfo="—";
 let trailCount=0, lastTrailPoint=null, trailQueue=[];
+let sessionStartFix=null, firstSendPending=false, startMarker=null;
 try{ trailQueue = JSON.parse(localStorage.getItem("fm_trail_queue")||"[]"); }catch(e){ trailQueue=[]; }
 let stopIntent = null;
 try{ stopIntent = JSON.parse(localStorage.getItem("fm_stop_intent")||"null"); }catch(e){ stopIntent=null; }
@@ -185,6 +191,7 @@ function speedKmh(fix){
 
 async function sendPosition(fix, why){
   const body = { lat:+fix.lat.toFixed(6), lng:+fix.lng.toFixed(6), accuracy: Math.round(fix.acc), speed: speedKmh(fix), dist: Math.round(sessionDist), ts: fix.ts, active:true, dev: ID.dev, name: ID.name||"", appV: APP_V, sv: SCHEMA_V };
+  if(firstSendPending && sessionStartFix){ body.startLat=+sessionStartFix.lat.toFixed(6); body.startLng=+sessionStartFix.lng.toFixed(6); firstSendPending=false; }
   try{
     const r = await dbWrite("PATCH", "/live/"+ID.shareId, body);
     lastWriteInfo = r.status+" at "+fmtTs(new Date());
@@ -220,6 +227,7 @@ function onFix(pos){
   /* distance from ALL accepted fixes; step counts only beyond the fix's accuracy radius (anti-creep) */
   if(prevAccFix){ const step=haversine(prevAccFix.lat,prevAccFix.lng,fix.lat,fix.lng); if(step>fix.acc) sessionDist+=step; }
   drawMe(fix.lat, fix.lng, fix.acc, !sharing);
+  if(sharing && !sessionStartFix) sessionStartFix = fix;
   if(sharing){
     let gate="too-soon";
     const moved = lastSentFix ? haversine(lastSentFix.lat,lastSentFix.lng,fix.lat,fix.lng) : 1e9;
@@ -246,11 +254,12 @@ window.addEventListener("online", async ()=>{ log("NET","back online"+(offlineSi
 /* ---- start / stop ---- */
 async function doStart(){
   if(!lastFix){ log("SHARE","start pressed with no fix yet — sharing will begin sending at first good fix"); }
-  sessionDist=0; trailCount=0; lastTrailPoint=null; myTrail=[]; if(trailLine){ trailLine.setLatLngs([]); }
+  sessionDist=0; trailCount=0; lastTrailPoint=null; myTrail=[]; if(trailLine){ trailLine.setLatLngs([]); trailLine.setStyle({color:"#2563eb",opacity:.55}); }
+  sessionStartFix=null; firstSendPending=true; endedAt=0; hideSummary(); if(startMarker){ map.removeLayer(startMarker); startMarker=null; }
   lastSentFix=null; lastSentAt=0;
   try{
     await dbWrite("DELETE", "/live/"+ID.shareId+"/trail");
-    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:true, startedAt: nowMs(), endedAt:null, dist:0, speed:null, lat:null, lng:null, ts: nowMs(), dev:ID.dev, name:ID.name||"", appV:APP_V, sv:SCHEMA_V });
+    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:true, startedAt: nowMs(), endedAt:null, dist:0, speed:null, lat:null, lng:null, startLat:null, startLng:null, ts: nowMs(), dev:ID.dev, name:ID.name||"", appV:APP_V, sv:SCHEMA_V });
     if(!r.ok){ log("SHARE","start write failed HTTP "+r.status); return; }
   }catch(e){ log("SHARE","start write error: "+e.message); return; }
   sharing=true; startedAt=nowMs();
@@ -264,15 +273,29 @@ async function doStop(isRetry){
   try{
     const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:false, endedAt: nowMs(), speed:null, ts: nowMs() });
     if(!r.ok){ log("SHARE","stop write failed HTTP "+r.status+" — will retry on reconnect"); return; }
-    await dbWrite("DELETE", "/live/"+ID.shareId+"/trail");
     stopIntent=null; try{ localStorage.removeItem("fm_stop_intent"); }catch(e){}
     sharing=false; endedAt=nowMs();
     if(wakeLock){ try{ await wakeLock.release(); }catch(e){} wakeLock=null; }
     log("SHARE","sharing STOPPED"+(isRetry?" (retry succeeded)":""));
+    drawStoppedRoute(); showSummary();
     renderSharing();
   }catch(e){ log("SHARE","stop write error: "+e.message+" — will retry on reconnect"); }
 }
 setInterval(()=>{ if(stopIntent && sharing) doStop(true); }, 20000);
+
+function fmtTime(ts){ return new Date(ts).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }
+function fmtDate(ts){ return new Date(ts).toLocaleDateString([], {weekday:"short", month:"short", day:"numeric", year:"numeric"}); }
+function summaryHTML(st, en, distM){
+  const dur = en-st; const avg = (distM>0 && dur>0) ? (distM/(dur/1000)*3.6).toFixed(1) : "—";
+  return fmtDate(st)+"<br>"+fmtTime(st)+" → "+fmtTime(en)+"<br>Duration "+fmtElapsed(dur)+" · Distance "+(distM/1000).toFixed(1)+" km · Avg "+avg+(avg==="—"?"":" km/h");
+}
+function showSummary(){ if(startedAt && endedAt){ $("summaryBody").innerHTML = summaryHTML(startedAt, endedAt, sessionDist); $("summaryCard").style.display="block"; } }
+function hideSummary(){ $("summaryCard").style.display="none"; }
+function drawStoppedRoute(){
+  if(trailLine) trailLine.setStyle({ color:"#64748b", opacity:.8 });
+  if(sessionStartFix){ if(startMarker) map.removeLayer(startMarker); startMarker = L.circleMarker([sessionStartFix.lat, sessionStartFix.lng], { radius:7, color:"#16a34a", weight:3, fillColor:"#fff", fillOpacity:1 }).addTo(map).bindTooltip("Start"); }
+  if(myTrail.length>1){ try{ map.fitBounds(L.latLngBounds(myTrail), { padding:[30,30] }); followMe=false; }catch(e){} }
+}
 
 function renderSharing(){
   $("shareBtn").textContent = sharing ? "■ Stop Sharing" : "▶ Start Sharing";
@@ -344,7 +367,7 @@ function shareLink(){ return FOLLOWER_URL+"?s="+ID.shareId; }
 function renderIdent(){
   $("identLine").textContent = ID.dev+" · "+(ID.name||"(tap edit name)");
   $("linkBox").value = shareLink();
-  $("aboutBox").innerHTML = "Tracker: Follow Me "+PAGE_V+"<br>Follower: v1.0 · Home: v1.0<br>Device: "+ID.dev+" · "+(ID.name||"")+"<br>Share ID: …"+ID.shareId.slice(-4);
+  $("aboutBox").innerHTML = "Tracker: Follow Me "+PAGE_V+"<br>Follower: v1.1 · Home: v1.1<br>Device: "+ID.dev+" · "+(ID.name||"")+"<br>Share ID: …"+ID.shareId.slice(-4);
 }
 $("shareBtn").addEventListener("click", ()=>{ if(sharing) doStop(false); else doStart(); });
 $("copyLinkBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(shareLink()); $("copyLinkBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLinkBtn").textContent="Copy",1500); }catch(e){ $("linkBox").select(); document.execCommand("copy"); } });
@@ -391,7 +414,7 @@ $("readbackBtn").addEventListener("click", runReadback);
 $("dlLogBtn").addEventListener("click", ()=>{ const blob=new Blob([exportLogText()],{type:"text/plain"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="followme-logs-"+ID.dev+"-"+new Date().toISOString().slice(0,10)+".txt"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); });
 $("copyLogBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(exportLogText()); $("copyLogBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLogBtn").textContent="Copy log",1500); }catch(e){} });
 $("clearLogBtn").addEventListener("click", ()=>{ if(confirm("Clear the on-device log?")){ logLines=[]; try{ localStorage.removeItem("fm_log"); }catch(e){} renderLog(); } });
-$("copyAboutBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText("Follow Me tracker "+PAGE_V+" · follower v1.0 · home v1.0 · device "+ID.dev+" · "+(ID.name||"")); }catch(e){} });
+$("copyAboutBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText("Follow Me tracker "+PAGE_V+" · follower v1.1 · home v1.1 · device "+ID.dev+" · "+(ID.name||"")); }catch(e){} });
 
 /* ============ init ============ */
 (async function init(){
@@ -413,6 +436,9 @@ $("copyAboutBtn").addEventListener("click", async ()=>{ try{ await navigator.cli
       const r = await fetch(FM_CONFIG.databaseURL+"/live/"+ID.shareId+".json?auth="+tok);
       const j = await r.json();
       if(!j){ const body={ dev:ID.dev, name:ID.name||"", owner:ID.uid, active:false, sv:SCHEMA_V, appV:APP_V, ts: nowMs() }; await dbWrite("PUT", "/live/"+ID.shareId, body); log("ID","record recreated (was missing)"); }
+      else if(!j.active && j.startedAt && j.endedAt){ startedAt=j.startedAt; endedAt=j.endedAt; sessionDist=j.dist||0; if(j.startLat!=null) sessionStartFix={ lat:j.startLat, lng:j.startLng };
+        try{ const tr = await (await fetch(FM_CONFIG.databaseURL+"/live/"+ID.shareId+"/trail.json")).json(); if(tr){ myTrail = Object.keys(tr).sort().map(k=>tr[k]).filter(p=>Array.isArray(p)); trailCount=myTrail.length; if(myTrail.length){ trailLine=L.polyline(myTrail,{color:"#64748b",weight:3,opacity:.8}).addTo(map); } } }catch(e){}
+        drawStoppedRoute(); showSummary(); log("ID","restored last session summary from the record"); }
       else if(j.active){ /* a previous session never got its stop through */ await dbWrite("PATCH", "/live/"+ID.shareId, { active:false, endedAt: nowMs(), speed:null }); log("ID","previous session was still marked live — marked stopped on open"); }
     }catch(e){ log("ID","record check failed: "+e.message); }
   }

@@ -40,7 +40,7 @@
 </head>
 <body>
 <header>
-  <h1>Follow Me</h1><span class="badge">Follower v1.0</span>
+  <h1>Follow Me</h1><span class="badge">Follower v1.1</span>
   <div class="ident">You are <b id="identLine">…</b></div>
 </header>
 
@@ -55,6 +55,11 @@
   <div class="fig"><div class="v" id="figAcc">—</div><div class="k">GPS acc</div></div>
 </div>
 
+<div class="card" id="summaryCard" style="display:none">
+  <h2 id="summaryTitle">Session summary</h2>
+  <div class="diag" id="summaryBody"></div>
+</div>
+
 <div class="card">
   <h2>Maintenance</h2>
   <label class="switch"><input type="checkbox" id="hbTgl" checked> Heartbeat — let the sharer see that I'm watching</label>
@@ -65,13 +70,13 @@
   <div class="note">Logs stay on this device. The sharer sees only your ID, name and follower version while your heartbeat is on.</div>
 </div>
 
-<footer>Follow Me follower · v1.0 · Live only — no history is kept.</footer>
+<footer>Follow Me follower · v1.1 · Live only — no history is kept.</footer>
 
 <script>
 "use strict";
 /* ============ CONFIG (Follow Me's own Firebase project — values live here only) ============ */
 const FM_CONFIG = { apiKey: "AIzaSyBgE0LvS635h76-SXObbR0Q_OZhZQx8ZJk", databaseURL: "https://follow-me-47b07-default-rtdb.firebaseio.com" };
-const FV = "1.0", KNOWN_SV = 1;
+const FV = "1.1", KNOWN_SV = 1;
 
 const $ = id => document.getElementById(id);
 const nowMs = () => Date.now();
@@ -127,7 +132,18 @@ function placeDot(){
 }
 
 /* ---- live record state (SSE) ---- */
-let rec=null, lastArrival=0, lastNewerTsAt=0, lastTsSeen=-1, gotFirst=false, wasActive=false;
+let rec=null, lastArrival=0, lastNewerTsAt=0, lastTsSeen=-1, gotFirst=false, wasActive=false, wasActivePrev=false;
+function fmtTime(ts){ return new Date(ts).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }
+function fmtDate(ts){ return new Date(ts).toLocaleDateString([], {weekday:"short", month:"short", day:"numeric", year:"numeric"}); }
+function showSummary(){
+  if(!rec || !rec.startedAt || !rec.endedAt){ hideSummary(); return; }
+  const dur = rec.endedAt-rec.startedAt; const distM = rec.dist||0;
+  const avg = (distM>0 && dur>0) ? (distM/(dur/1000)*3.6).toFixed(1) : "—";
+  $("summaryTitle").textContent = "Session summary — "+(rec.name||rec.dev||"");
+  $("summaryBody").innerHTML = fmtDate(rec.startedAt)+"<br>"+fmtTime(rec.startedAt)+" → "+fmtTime(rec.endedAt)+"<br>Duration "+fmtElapsed(dur)+" · Distance "+(distM/1000).toFixed(1)+" km · Avg "+avg+(avg==="—"?"":" km/h");
+  $("summaryCard").style.display="block";
+}
+function hideSummary(){ $("summaryCard").style.display="none"; }
 function applyEvent(path, data){
   lastArrival=nowMs();
   if(path==="/" || path===""){ rec = data; }
@@ -185,15 +201,27 @@ function render(){
   if(rec.active && rec.lat==null){ st.innerHTML='<span class="dot-stale">●</span> '+sharer+" — sharing · waiting for a good fix"; sub.textContent=""; }
   else if(rec.active && isStale()){ st.innerHTML='<span class="dot-stale">●</span> '+sharer+" — last seen "+ago(rec.ts); sub.textContent="updated "+ago(rec.ts); setDot(rec.lat, rec.lng, rec.accuracy, true); }
   else if(rec.active){ st.innerHTML='<span class="dot-live">●</span> '+sharer+" — Live"; sub.textContent="updated "+ago(rec.ts); setDot(rec.lat, rec.lng, rec.accuracy, false); }
-  else { st.innerHTML='<span class="dot-off">●</span> '+sharer+" — stopped here"+(rec.endedAt?" · "+fmtClock(rec.endedAt):""); sub.textContent=""; if(rec.lat!=null) setDot(rec.lat, rec.lng, rec.accuracy, true); clearTrail(); }
-  /* trail */
-  if(rec.active && rec.trail){ const pts=Object.keys(rec.trail).sort().map(k=>rec.trail[k]).filter(p=>Array.isArray(p)); drawTrail(pts); }
-  else if(rec.active){ drawTrail([]); }
+  else { st.innerHTML='<span class="dot-off">●</span> '+sharer+" — stopped here"+(rec.endedAt?" · "+fmtClock(rec.endedAt):""); sub.textContent=""; if(rec.lat!=null) setDot(rec.lat, rec.lng, rec.accuracy, true); showSummary(); }
+  /* trail — live: blue; stopped: the kept route, grey, with start marker (summary view) */
+  const pts = rec.trail ? Object.keys(rec.trail).sort().map(k=>rec.trail[k]).filter(p=>Array.isArray(p)) : [];
+  if(rec.active){ hideSummary(); clearStartMarker(); drawTrail(pts, false); }
+  else { drawTrail(pts, true); if(pts.length) drawStartMarker(rec, pts); if(!wasActivePrev && pts.length>1){ try{ map.fitBounds(L.latLngBounds(pts), { padding:[30,30] }); followDot=false; }catch(e){} } }
+  wasActivePrev = !!rec.active;
   diag();
 }
 function setDot(lat,lng,acc,grey){ if(lat==null||lng==null) return; curGrey=grey; curAcc=acc||0; glideTo(lat,lng); }
 function clearDot(){ if(dotMarker){ map.removeLayer(dotMarker); dotMarker=null; } if(accCircle){ map.removeLayer(accCircle); accCircle=null; } dispPos=null; targetPos=null; }
-function drawTrail(pts){ if(!pts.length){ clearTrail(); return; } if(!trailLine){ trailLine=L.polyline(pts,{color:"#2563eb",weight:3,opacity:.55}).addTo(map); } else trailLine.setLatLngs(pts); }
+let startMarker=null;
+function drawTrail(pts, grey){ if(!pts.length){ clearTrail(); return; } const st = grey? {color:"#64748b",weight:3,opacity:.8} : {color:"#2563eb",weight:3,opacity:.55}; if(!trailLine){ trailLine=L.polyline(pts, st).addTo(map); } else { trailLine.setLatLngs(pts); trailLine.setStyle(st); } }
+function drawStartMarker(rec, pts){
+  let p=null;
+  if(rec.startLat!=null && rec.startLng!=null) p=[rec.startLat, rec.startLng];
+  else if(pts && pts.length) p=pts[0];
+  if(!p) return;
+  if(!startMarker){ startMarker=L.circleMarker(p,{radius:7,color:"#16a34a",weight:3,fillColor:"#fff",fillOpacity:1}).addTo(map).bindTooltip("Start"); }
+  else startMarker.setLatLng(p);
+}
+function clearStartMarker(){ if(startMarker){ map.removeLayer(startMarker); startMarker=null; } }
 function clearTrail(){ if(trailLine){ trailLine.setLatLngs([]); } }
 function diag(extra){
   if(extra){ $("diagBox").textContent="Last record received: "+extra; return; }
