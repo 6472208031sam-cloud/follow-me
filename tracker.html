@@ -44,7 +44,7 @@
 </head>
 <body>
 <header>
-  <h1>Follow Me</h1><span class="badge">web v1.1</span>
+  <h1>Follow Me</h1><span class="badge">web v1.2</span>
   <div class="ident">You are <b id="identLine">…</b> &nbsp;·&nbsp; <a href="#" id="editNameLink">edit name</a> · <a href="#" id="regenLink">regenerate ID</a></div>
 </header>
 
@@ -88,13 +88,13 @@
   <div class="row" style="margin-top:6px"><button class="small" id="copyAboutBtn">Copy versions</button></div>
 </div>
 
-<footer>Follow Me tracker · web v1.1 · Keep this page open and the screen on while sharing (web version). Android app comes in a later step.</footer>
+<footer>Follow Me tracker · web v1.2 · Keep this page open and the screen on while sharing (web version). Android app comes in a later step.</footer>
 
 <script>
 "use strict";
 /* ============ CONFIG (values live here only — Follow Me's own Firebase project) ============ */
 const FM_CONFIG = { apiKey: "AIzaSyBgE0LvS635h76-SXObbR0Q_OZhZQx8ZJk", databaseURL: "https://follow-me-47b07-default-rtdb.firebaseio.com" };
-const APP_V = "web 1.1", SCHEMA_V = 1, PAGE_V = "web v1.1";
+const APP_V = "web 1.2", SCHEMA_V = 1, PAGE_V = "web v1.2";
 const FOLLOWER_URL = location.origin + location.pathname.replace(/[^/]*$/, "") + "follow.html";
 
 /* ============ helpers ============ */
@@ -253,16 +253,18 @@ window.addEventListener("online", async ()=>{ log("NET","back online"+(offlineSi
 
 /* ---- start / stop ---- */
 async function doStart(){
+  const stNow = nowMs();
   if(!lastFix){ log("SHARE","start pressed with no fix yet — sharing will begin sending at first good fix"); }
   sessionDist=0; trailCount=0; lastTrailPoint=null; myTrail=[]; if(trailLine){ trailLine.setLatLngs([]); trailLine.setStyle({color:"#2563eb",opacity:.55}); }
   sessionStartFix=null; firstSendPending=true; endedAt=0; hideSummary(); if(startMarker){ map.removeLayer(startMarker); startMarker=null; }
   lastSentFix=null; lastSentAt=0;
   try{
     await dbWrite("DELETE", "/live/"+ID.shareId+"/trail");
-    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:true, startedAt: nowMs(), endedAt:null, dist:0, speed:null, lat:null, lng:null, startLat:null, startLng:null, ts: nowMs(), dev:ID.dev, name:ID.name||"", appV:APP_V, sv:SCHEMA_V });
+    sessWatch = { startedAt: stNow, w:{} }; saveSessWatch();
+    const r = await dbWrite("PATCH", "/live/"+ID.shareId, { active:true, startedAt: stNow, endedAt:null, dist:0, speed:null, lat:null, lng:null, startLat:null, startLng:null, ts: stNow, dev:ID.dev, name:ID.name||"", appV:APP_V, sv:SCHEMA_V });
     if(!r.ok){ log("SHARE","start write failed HTTP "+r.status); return; }
   }catch(e){ log("SHARE","start write error: "+e.message); return; }
-  sharing=true; startedAt=nowMs();
+  sharing=true; startedAt=stNow;
   acquireWakeLock();
   log("SHARE","sharing STARTED");
   if(lastFix && lastFix.acc<=100) sendPosition(lastFix, "start");
@@ -289,7 +291,7 @@ function summaryHTML(st, en, distM){
   const dur = en-st; const avg = (distM>0 && dur>0) ? (distM/(dur/1000)*3.6).toFixed(1) : "—";
   return fmtDate(st)+"<br>"+fmtTime(st)+" → "+fmtTime(en)+"<br>Duration "+fmtElapsed(dur)+" · Distance "+(distM/1000).toFixed(1)+" km · Avg "+avg+(avg==="—"?"":" km/h");
 }
-function showSummary(){ if(startedAt && endedAt){ $("summaryBody").innerHTML = summaryHTML(startedAt, endedAt, sessionDist); $("summaryCard").style.display="block"; } }
+function showSummary(){ if(startedAt && endedAt){ $("summaryBody").innerHTML = summaryHTML(startedAt, endedAt, sessionDist) + watchedByHTML(); $("summaryCard").style.display="block"; } }
 function hideSummary(){ $("summaryCard").style.display="none"; }
 function drawStoppedRoute(){
   if(trailLine) trailLine.setStyle({ color:"#64748b", opacity:.8 });
@@ -302,6 +304,34 @@ function renderSharing(){
   $("shareBtn").className = "bigbtn"+(sharing?" stop":"");
 }
 
+/* ---- session watcher memory (TRACKER ONLY: kept in this device's storage, never written to Firebase) ---- */
+let sessWatch = { startedAt:0, w:{} };
+try{ sessWatch = JSON.parse(localStorage.getItem("fm_sess_watch")||'{"startedAt":0,"w":{}}'); }catch(e){ sessWatch={startedAt:0,w:{}}; }
+function saveSessWatch(){ try{ localStorage.setItem("fm_sess_watch", JSON.stringify(sessWatch)); }catch(e){} }
+function noteWatchers(entries, sessionStart){
+  if(!sessionStart) return;
+  if(sessWatch.startedAt !== sessionStart){ sessWatch = { startedAt: sessionStart, w:{} }; }
+  let changed=false;
+  for(const [uuid, w] of entries){
+    if(!w || !w.ts) continue;
+    const cur = sessWatch.w[uuid];
+    if(!cur){ sessWatch.w[uuid] = { fid:w.fid||"?", fname:w.fname||"", first:w.ts, last:w.ts }; changed=true; }
+    else { if(w.ts<cur.first){ cur.first=w.ts; changed=true; } if(w.ts>cur.last){ cur.last=w.ts; changed=true; } if(w.fid && w.fid!==cur.fid){ cur.fid=w.fid; changed=true; } if(w.fname && w.fname!==cur.fname){ cur.fname=w.fname; changed=true; } }
+  }
+  if(changed) saveSessWatch();
+}
+function watchedByHTML(){
+  const list = Object.values(sessWatch.w||{}).sort((a,b)=>a.first-b.first);
+  if(!startedAt || sessWatch.startedAt !== startedAt) return "";
+  if(!list.length) return '<br><br><b>Watched by:</b> no watchers with heartbeat on were seen';
+  const lines = list.map(w=>{
+    const dur = Math.max(0, w.last - w.first);
+    const still = endedAt && (endedAt - w.last) <= 180000;
+    return (w.fid||"?")+(w.fname?" · "+w.fname:"")+" — "+fmtTime(w.first)+" → "+(still?"still watching at Stop":fmtTime(w.last))+" ("+fmtElapsed(dur)+")";
+  });
+  return '<br><br><b>Watched by</b> (this device only · heartbeat watchers · times approximate):<br>'+lines.join("<br>");
+}
+
 /* ---- watching (poll the owner-only watch list) ---- */
 let watchList=[];
 async function pollWatch(){
@@ -311,8 +341,11 @@ async function pollWatch(){
     const r = await fetch(FM_CONFIG.databaseURL+"/watch/"+ID.shareId+".json?auth="+tok);
     if(!r.ok){ $("watchLine").textContent="Watching: —"; return; }
     const j = await r.json();
-    watchList = j ? Object.values(j) : [];
-    const fresh = watchList.filter(w=> w && (nowMs()-(w.ts||0))<=180000);
+    const entries = j ? Object.entries(j) : [];
+    watchList = entries.map(e=>e[1]);
+    const freshEntries = entries.filter(([k,w])=> w && (nowMs()-(w.ts||0))<=180000);
+    if(sharing) noteWatchers(freshEntries, startedAt);
+    const fresh = freshEntries.map(e=>e[1]);
     $("watchLine").textContent = "Watching: " + (fresh.length ? fresh.length+" — "+fresh.map(w=> (w.fid||"?")+(w.fname?" · "+w.fname:"")).join(", ") : "0");
   }catch(e){ /* silent */ }
 }
@@ -367,7 +400,7 @@ function shareLink(){ return FOLLOWER_URL+"?s="+ID.shareId; }
 function renderIdent(){
   $("identLine").textContent = ID.dev+" · "+(ID.name||"(tap edit name)");
   $("linkBox").value = shareLink();
-  $("aboutBox").innerHTML = "Tracker: Follow Me "+PAGE_V+"<br>Follower: v1.1 · Home: v1.1<br>Device: "+ID.dev+" · "+(ID.name||"")+"<br>Share ID: …"+ID.shareId.slice(-4);
+  $("aboutBox").innerHTML = "Tracker: Follow Me "+PAGE_V+"<br>Follower: v1.1 · Home: v1.2<br>Device: "+ID.dev+" · "+(ID.name||"")+"<br>Share ID: …"+ID.shareId.slice(-4);
 }
 $("shareBtn").addEventListener("click", ()=>{ if(sharing) doStop(false); else doStart(); });
 $("copyLinkBtn").addEventListener("click", async ()=>{ try{ await navigator.clipboard.writeText(shareLink()); $("copyLinkBtn").textContent="Copied ✓"; setTimeout(()=>$("copyLinkBtn").textContent="Copy",1500); }catch(e){ $("linkBox").select(); document.execCommand("copy"); } });

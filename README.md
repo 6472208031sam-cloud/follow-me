@@ -2,7 +2,7 @@
 
 Share your live location with a link. Press **Start Sharing**, send the link, and anyone with it watches your dot move live on a map until you press **Stop**. No route, no stops, no accounts for watchers.
 
-- `index.html` — home / landing page (home v1.1)
+- `index.html` — home / landing page (home v1.2)
 - `tracker.html` — the tracker web app (web v1.1): identity + anonymous sign-in, GPS, sharing engine, diagnostics, on-device logs
 - `follow.html?s=<shareId>` — the follower page (v1.1): live mirror via SSE, presence heartbeat, Maintenance section
 
